@@ -8,9 +8,11 @@ This repository contains the codebase for evaluating and fine-tuning small open-
 .
 ├── src/
 │   ├── data_prep.py   # Dataset loading and prompt formatting
-│   ├── evaluate.py    # Inference script for baseline and finetuned comparison
+│   ├── inference.py   # Reusable inference script; saves per-sample outputs for both models
+│   ├── evaluate.py    # ROUGE evaluation (baseline and fine-tuned comparison)
 │   ├── train.py       # Fine-tuning script using QLoRA and SFTTrainer
 ├── tests/             # Pytest directory for basic structure testing
+├── outputs/           # Generated inference outputs (created at runtime)
 ├── requirements.txt   # Dependencies
 └── README.md
 ```
@@ -29,32 +31,80 @@ This repository contains the codebase for evaluating and fine-tuning small open-
 
 ## Workflow & Usage
 
-### 1. Baseline Evaluation
-Prior to training, select two small open-source LLMs (0.3B to 4B params) and evaluate them on our common test set. Note that `--load_in_4bit` can be used if running on limited VRAM.
+### 0. Data Preparation (optional)
+Download and cache the dataset splits locally as JSONL files:
 
 ```bash
+python -m src.data_prep
+```
+
+### 1. Inference on Both Models
+Run inference for Model A and Model B on the **same** test corpus. Outputs are saved under `outputs/` as JSONL files, one per model, with the following fields per sample: `model_name`, `question`, `reference_answer`, `generated_answer`.
+
+**PowerShell:**
+```powershell
+python -m src.inference `
+    --model_a "MODEL_A_HF_ID" `
+    --model_b "MODEL_B_HF_ID" `
+    --output_dir outputs `
+    --max_new_tokens 256
+```
+
+**bash / Linux / macOS:**
+```bash
+python -m src.inference \
+    --model_a "MODEL_A_HF_ID" \
+    --model_b "MODEL_B_HF_ID" \
+    --output_dir outputs \
+    --max_new_tokens 256
+```
+
+Generation settings (all documented in `src/inference.py → GENERATION_CONFIG`):
+
+| Setting | Value | Notes |
+|---|---|---|
+| `max_new_tokens` | 256 | Max tokens generated per answer |
+| `do_sample` | False | Greedy decoding — deterministic output |
+| `temperature` | N/A | Not applied when `do_sample=False` |
+| `device` | auto | GPU if available, otherwise CPU |
+| `load_in_4bit` | False | Add `--load_in_4bit` flag to reduce VRAM |
+
+To run on a subset for quick testing (PowerShell):
+
+```powershell
+python -m src.inference `
+    --model_a "MODEL_A_HF_ID" `
+    --model_b "MODEL_B_HF_ID" `
+    --sample_size 50 `
+    --load_in_4bit
+```
+
+### 2. Baseline Evaluation
+After inference, compute ROUGE scores against reference answers. `--load_in_4bit` can be used if running on limited VRAM.
+
+```powershell
 python -m src.evaluate --model_name "YOUR_SELECTED_MODEL_ID_1"
 python -m src.evaluate --model_name "YOUR_SELECTED_MODEL_ID_2"
 ```
 
-### 2. Fine-Tuning
+### 3. Fine-Tuning
 After selecting the best performing model from the baseline evaluation, train it using Supervised Fine-Tuning (SFTTrainer) + PEFT/QLoRA framework over the `train` dataset constraint split only. *The test set is completely unseen.*
 
-```bash
-python -m src.train \
-    --model_name "YOUR_SELECTED_MODEL_ID" \
-    --output_dir "models/fine_tuned" \
-    --epochs 3 \
+```powershell
+python -m src.train `
+    --model_name "YOUR_SELECTED_MODEL_ID" `
+    --output_dir "models/fine_tuned" `
+    --epochs 3 `
     --batch_size 4
 ```
 
-### 3. Post-Training Evaluation
+### 4. Post-Training Evaluation
 Test the final adapted model over the exact same test dataset.
 
-```bash
-python -m src.evaluate \
-    --model_name "YOUR_SELECTED_MODEL_ID" \
-    --adapter_path "models/fine_tuned/final_model" \
+```powershell
+python -m src.evaluate `
+    --model_name "YOUR_SELECTED_MODEL_ID" `
+    --adapter_path "models/fine_tuned/final_model" `
     --sample_size 1500
 ```
 
