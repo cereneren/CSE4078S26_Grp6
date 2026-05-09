@@ -1,55 +1,25 @@
 import os
-from typing import Dict, Any
-from datasets import load_dataset, DatasetDict
+from datasets import load_dataset
 
-def load_and_prepare_dataset(dataset_name: str = "Renicames/turkish-law-chatbot") -> DatasetDict:
-    """
-    Loads the dataset from Hugging Face and prepares it for training and evaluation.
+def main():
+    print("⏳ Hugging Face'ten veri seti indiriliyor (Renicames/turkish-law-chatbot)...")
+    dataset = load_dataset("Renicames/turkish-law-chatbot")
     
-    Args:
-        dataset_name: The name of the dataset repository on Hugging Face.
-        
-    Returns:
-        A DatasetDict containing 'train' and 'test' splits.
-    """
-    dataset = load_dataset(dataset_name)
-    return dataset
+    print("\n📊 Veri Seti Bilgileri:")
+    print(dataset)
+    
+    # data klasörünü oluştur (yoksa hata vermesin diye exist_ok=True yapıyoruz)
+    os.makedirs("data", exist_ok=True)
+    
+    # Test setini direkt kaydet (Eğitimden TAMAMEN izole)
+    print("\n🔒 Test seti (1.5k) izole ediliyor: data/test_corpus.jsonl")
+    dataset['test'].to_json("data/test_corpus.jsonl", force_ascii=False)
+    
+    # Train setini kaydet
+    print("📝 Eğitim seti (13.4k) kaydediliyor: data/train_corpus.jsonl")
+    dataset['train'].to_json("data/train_corpus.jsonl", force_ascii=False)
+    
+    print("\n✅ İşlem Tamam! data/ klasörü oluşturuldu ve dosyalar içine yazıldı.")
 
-def format_prompt(sample: Dict[str, Any]) -> str:
-    """
-    Formats the sample into a prompt suitable for instruction fine-tuning.
-    
-    Args:
-        sample: A dictionary containing data fields.
-        
-    Returns:
-        A formatted string.
-    """
-    system_prompt = "Sen bir Türk hukuk asistanısın. Kullanıcının hukuki sorularını doğru ve eksiksiz bir şekilde yanıtla."
-    
-    # Adapt to different dataset architectures dynamically
-    instruction = sample.get("instruction", sample.get("question", sample.get("soru", "")))
-    input_text = sample.get("input", sample.get("context", ""))
-    output = sample.get("output", sample.get("answer", sample.get("cevap", "")))
-    
-    if input_text and str(input_text).strip():
-        prompt = f"Sistem: {system_prompt}\n\nSoru: {instruction}\n\nBağlam: {input_text}\n\nCevap: {output}"
-    else:
-        prompt = f"Sistem: {system_prompt}\n\nSoru: {instruction}\n\nCevap: {output}"
-        
-    return prompt
-
-def apply_prompt_template(dataset: DatasetDict) -> DatasetDict:
-    """
-    Applies the prompt formatting to all splits in the dataset.
-    
-    Args:
-        dataset: The DatasetDict to format.
-        
-    Returns:
-        A DatasetDict with an additional 'text' column containing the formatted prompts.
-    """
-    def _map_fn(example):
-        return {"text": format_prompt(example)}
-    
-    return dataset.map(_map_fn)
+if __name__ == "__main__":
+    main()
