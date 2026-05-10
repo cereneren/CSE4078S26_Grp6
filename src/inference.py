@@ -138,7 +138,10 @@ def load_model(
     Returns:
         Tuple of (model, tokenizer).
     """
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -159,7 +162,11 @@ def load_model(
     else:
         load_kwargs["torch_dtype"] = torch.float16
 
-    model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        **load_kwargs,
+    )
     model.eval()
     return model, tokenizer
 

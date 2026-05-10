@@ -30,6 +30,7 @@ def extract_fields(item: dict) -> tuple[str, str, str]:
         or item.get("context")
         or item.get("Bağlam")
         or item.get("Baglam")
+        or item.get("bağlam")
         or item.get("baglam")
         or item.get("Bagam")
         or item.get("bagam")
@@ -54,6 +55,7 @@ def load_model_for_evaluation(
 ):
     """
     Loads a base model, tokenizer, and optionally a LoRA adapter.
+    This mode is slower because it generates answers before calculating ROUGE.
     """
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -84,6 +86,101 @@ def load_model_for_evaluation(
     return model, tokenizer
 
 
+def save_metrics(results: dict, metrics_path: str):
+    """
+    Saves ROUGE metrics as JSON.
+    """
+    os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
+
+def print_results(title: str, results: dict, sample_count: int, extra_info: Optional[str] = None):
+    """
+    Prints ROUGE results in a readable format.
+    """
+    print("\n===============================")
+    print(title)
+
+    if extra_info:
+        print(extra_info)
+
+    print(f"Samples: {sample_count}")
+    print("===============================")
+
+    for key, value in results.items():
+        print(f"{key}: {value:.4f}")
+
+
+def evaluate_from_file(
+    input_file: str,
+    output_dir: str = "outputs",
+    metrics_name: Optional[str] = None,
+):
+    """
+    Fast evaluation mode.
+
+    Reads an existing inference JSONL file and calculates ROUGE using:
+    - generated_answer
+    - reference_answer
+
+    This avoids loading the model and generating answers again.
+    """
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+
+    rouge = evaluate.load("rouge")
+
+    predictions = []
+    references = []
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
+            line = line.strip()
+
+            if not line:
+                continue
+
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Invalid JSON on line {line_number} in {input_file}"
+                ) from e
+
+            generated_answer = item.get("generated_answer", "")
+            reference_answer = item.get("reference_answer", "")
+
+            predictions.append(generated_answer)
+            references.append(reference_answer)
+
+    if not predictions:
+        raise ValueError(f"No valid prediction records found in {input_file}")
+
+    results = rouge.compute(predictions=predictions, references=references)
+
+    print_results(
+        title="Evaluation Results from Saved Inference File",
+        results=results,
+        sample_count=len(predictions),
+        extra_info=f"Input file: {input_file}",
+    )
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    if metrics_name is None:
+        base_name = os.path.splitext(os.path.basename(input_file))[0]
+        metrics_name = f"{base_name}_rouge_metrics.json"
+
+    metrics_path = os.path.join(output_dir, metrics_name)
+    save_metrics(results, metrics_path)
+
+    print(f"\nROUGE metrics saved to: {metrics_path}")
+
+    return results
+
+
 def run_evaluation(
     model_name: str,
     adapter_path: Optional[str] = None,
@@ -94,9 +191,12 @@ def run_evaluation(
     dataset_name: str = "Renicames/turkish-law-chatbot",
 ):
     """
-    Evaluates a base or fine-tuned model on the test split using ROUGE.
+    Slow evaluation mode.
 
-    The test split should only be used here, after model selection/training.
+    Loads the model, generates answers on the test split, then calculates ROUGE.
+
+    Use this only if you do not already have an inference JSONL file.
+    If you already ran inference.py, use --input_file instead.
     """
     dataset = load_and_prepare_dataset(dataset_name)
     test_data = dataset["test"]
@@ -143,15 +243,15 @@ def run_evaluation(
 
     results = rouge.compute(predictions=predictions, references=references)
 
-    print("\n===============================")
-    print(f"Evaluation Results")
-    print(f"Model: {model_name}")
-    print(f"Adapter: {adapter_path if adapter_path else 'Base Model'}")
-    print(f"Samples: {len(test_data)}")
-    print("===============================")
-
-    for key, value in results.items():
-        print(f"{key}: {value:.4f}")
+    print_results(
+        title="Evaluation Results",
+        results=results,
+        sample_count=len(test_data),
+        extra_info=(
+            f"Model: {model_name}\n"
+            f"Adapter: {adapter_path if adapter_path else 'Base Model'}"
+        ),
+    )
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -172,8 +272,7 @@ def run_evaluation(
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    save_metrics(results, metrics_path)
 
     print(f"\nGenerated answers saved to: {predictions_path}")
     print(f"ROUGE metrics saved to: {metrics_path}")
@@ -187,61 +286,88 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--input_file",
+        type=str,
+        default=None,
+        help=(
+            "Fast mode: evaluate an existing inference JSONL file instead of "
+            "loading the model and generating answers again."
+        ),
+    )
+
+    parser.add_argument(
         "--model_name",
         type=str,
-        required=True,
-        help="Base Hugging Face model ID",
+        default=None,
+        help="Base Hugging Face model ID. Required unless --input_file is used.",
     )
 
     parser.add_argument(
         "--adapter_path",
         type=str,
         default=None,
-        help="Path to LoRA adapter weights, if evaluating a fine-tuned model",
+        help="Path to LoRA adapter weights, if evaluating a fine-tuned model.",
     )
 
     parser.add_argument(
         "--sample_size",
         type=int,
         default=None,
-        help="Limit number of test samples evaluated",
+        help="Limit number of test samples evaluated in slow generation mode.",
     )
 
     parser.add_argument(
         "--load_in_4bit",
         action="store_true",
-        help="Load model in 4-bit to reduce VRAM usage",
+        help="Load model in 4-bit to reduce VRAM usage in slow generation mode.",
     )
 
     parser.add_argument(
         "--max_new_tokens",
         type=int,
         default=256,
-        help="Maximum number of tokens generated per answer",
+        help="Maximum number of tokens generated per answer in slow generation mode.",
     )
 
     parser.add_argument(
         "--output_dir",
         type=str,
         default="outputs",
-        help="Directory for evaluation outputs and metrics",
+        help="Directory for evaluation outputs and metrics.",
     )
 
     parser.add_argument(
         "--dataset_name",
         type=str,
         default="Renicames/turkish-law-chatbot",
-        help="Hugging Face dataset ID",
+        help="Hugging Face dataset ID.",
+    )
+
+    parser.add_argument(
+        "--metrics_name",
+        type=str,
+        default=None,
+        help="Optional output filename for ROUGE metrics when using --input_file.",
     )
 
     args = parser.parse_args()
 
-    run_evaluation(
-        model_name=args.model_name,
-        adapter_path=args.adapter_path,
-        sample_size=args.sample_size,
-        load_in_4bit=args.load_in_4bit,
-        max_new_tokens=args.max_new_tokens,
-        output_dir=args.output_dir,
-        dataset_name=args.dataset_name,
-    )
+    if args.input_file:
+        evaluate_from_file(
+            input_file=args.input_file,
+            output_dir=args.output_dir,
+            metrics_name=args.metrics_name,
+        )
+    else:
+        if not args.model_name:
+            raise ValueError("You must provide --model_name unless using --input_file.")
+
+        run_evaluation(
+            model_name=args.model_name,
+            adapter_path=args.adapter_path,
+            sample_size=args.sample_size,
+            load_in_4bit=args.load_in_4bit,
+            max_new_tokens=args.max_new_tokens,
+            output_dir=args.output_dir,
+            dataset_name=args.dataset_name,
+        )
