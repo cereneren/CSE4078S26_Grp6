@@ -50,9 +50,12 @@ def apply_prompt_template(dataset: DatasetDict) -> DatasetDict:
         context = (
             row.get("input")
             or row.get("context")
+            or row.get("Bağlam")
+            or row.get("Baglam")
+            or row.get("bağlam")
+            or row.get("baglam")
             or row.get("Bagam")
             or row.get("bagam")
-            or ""
         )
         answer = (
             row.get("output")
