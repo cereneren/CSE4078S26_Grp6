@@ -1,0 +1,48 @@
+{
+  "project": "CSE4078 Spring 2026 Term Project",
+  "dataset": "Renicames/turkish-law-chatbot",
+  "model_name": "Qwen/Qwen2.5-3B-Instruct",
+  "method": "Supervised Fine-Tuning with QLoRA",
+  "official_train_split_size": 13354,
+  "official_test_split_size": 1500,
+  "post_deduplication_size": 13354,
+  "training_samples": 12018,
+  "validation_samples": 1336,
+  "validation_ratio": 0.1,
+  "test_used_during_training": false,
+  "num_train_epochs": 3,
+  "per_device_batch_size": 1,
+  "gradient_accumulation_steps": 4,
+  "effective_batch_size_per_process": 4,
+  "learning_rate": 0.0002,
+  "max_seq_length": 256,
+  "seed": 42,
+  "quantization": {
+    "bits": 4,
+    "type": "NF4",
+    "double_quantization": true,
+    "compute_dtype": "torch.bfloat16"
+  },
+  "lora": {
+    "rank": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ]
+  },
+  "software": {
+    "python": "3.12.5",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.12.0",
+    "trl": "1.6.0",
+    "peft": "0.19.1"
+  },
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+    "gpu_memory_gb": 4.0
+  }
+}
