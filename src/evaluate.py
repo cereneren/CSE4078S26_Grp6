@@ -186,7 +186,7 @@ def run_evaluation(
     adapter_path: Optional[str] = None,
     sample_size: Optional[int] = None,
     load_in_4bit: bool = False,
-    max_new_tokens: int = 256,
+    max_new_tokens: int = 128,
     output_dir: str = "outputs",
     dataset_name: str = "Renicames/turkish-law-chatbot",
 ):
@@ -325,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=256,
+        default=128,
         help="Maximum number of tokens generated per answer in slow generation mode.",
     )
 
