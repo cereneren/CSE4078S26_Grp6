@@ -367,7 +367,7 @@ data/test_corpus.jsonl
 ```bash
 python -m src.inference \
   --model_a "Qwen/Qwen2.5-3B-Instruct" \
-  --output_dir "outputs" \
+  --output_dir "outputs/test_baseline" \
   --sample_size 1500 \
   --max_new_tokens 128 \
   --load_in_4bit
@@ -386,7 +386,7 @@ outputs/Qwen_Qwen2_5-3B-Instruct_inference.jsonl
 ```bash
 python -m src.inference \
   --model_a "amd/Instella-3B-Instruct" \
-  --output_dir "outputs" \
+  --output_dir "outputs/test_baseline" \
   --sample_size 1500 \
   --max_new_tokens 128 \
   --load_in_4bit
@@ -395,7 +395,7 @@ python -m src.inference \
 Expected output:
 
 ```text
-outputs/amd_Instella-3B-Instruct_inference.jsonl
+outputs/test_baseline/amd_Instella-3B-Instruct_inference.jsonl
 ```
 
 Running the models separately is recommended on systems with limited GPU memory.
@@ -408,8 +408,8 @@ Qwen:
 
 ```bash
 python -m src.evaluate \
-  --input_file "outputs/Qwen_Qwen2_5-3B-Instruct_inference.jsonl" \
-  --output_dir "outputs" \
+  --input_file "outputs/test_baseline/Qwen_Qwen2_5-3B-Instruct_inference.jsonl" \
+  --output_dir "outputs/test_baseline" \
   --metrics_name "Qwen_Qwen2_5-3B-Instruct_inference_rouge_metrics.json"
 ```
 
@@ -417,8 +417,8 @@ Instella:
 
 ```bash
 python -m src.evaluate \
-  --input_file "outputs/amd_Instella-3B-Instruct_inference.jsonl" \
-  --output_dir "outputs" \
+  --input_file "outputs/test_baseline/amd_Instella-3B-Instruct_inference.jsonl" \
+  --output_dir "outputs/test_baseline" \
   --metrics_name "amd_Instella-3B-Instruct_inference_rouge_metrics.json"
 ```
 
@@ -430,18 +430,18 @@ Qwen:
 
 ```bash
 python -m src.bertscore_eval \
-  --input_file "outputs/Qwen_Qwen2_5-3B-Instruct_inference.jsonl" \
+  --input_file "outputs/test_baseline/Qwen_Qwen2_5-3B-Instruct_inference.jsonl" \
   --model_type "bert-base-multilingual-cased" \
-  --output_dir "outputs"
+  --output_dir "outputs/test_baseline"
 ```
 
 Instella:
 
 ```bash
 python -m src.bertscore_eval \
-  --input_file "outputs/amd_Instella-3B-Instruct_inference.jsonl" \
+  --input_file "outputs/test_baseline/amd_Instella-3B-Instruct_inference.jsonl" \
   --model_type "bert-base-multilingual-cased" \
-  --output_dir "outputs"
+  --output_dir "outputs/test_baseline"
 ```
 
 ---
