@@ -38,7 +38,7 @@ from src.data_prep import load_and_prepare_dataset
 # Generation hyper-parameters (single source of truth)
 # ---------------------------------------------------------------------------
 GENERATION_CONFIG: dict = {
-    "max_new_tokens": 256,
+    "max_new_tokens": 128,
     "do_sample": False,       # greedy decoding — temperature is not applied
     "temperature": None,      # kept for documentation; ignored when do_sample=False
 }
