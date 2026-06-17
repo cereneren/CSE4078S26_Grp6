@@ -1,0 +1,8 @@
+{
+  "input_file": "outputs/Qwen_Qwen3-4B-Instruct-2507_finetuned_full_inference.jsonl",
+  "samples": 1500,
+  "bertscore_model": "bert-base-multilingual-cased",
+  "bertscore_precision": 0.8275400400161743,
+  "bertscore_recall": 0.8327570557594299,
+  "bertscore_f1": 0.8293920755386353
+}
