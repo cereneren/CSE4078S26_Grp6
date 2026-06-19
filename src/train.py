@@ -2,22 +2,15 @@
 train.py — Supervised fine-tuning (LoRA / QLoRA) of Qwen3-4B-Instruct-2507 on the
 cleaned, de-duplicated Turkish legal QA SFT set produced by src/preprocess.py.
 
-This is a SEPARATE script from train.py (the team's QLoRA pipeline is left untouched).
-Differences in this v2:
-  * trains on data/train_sft.jsonl + data/val_sft.jsonl (conversational 'messages'
-    format → the model's native chat template), instead of the plain-text prompt;
-  * default precision = bf16 LoRA (16-bit base + LoRA); --load_in_4bit switches to QLoRA;
-  * LoRA targets attention + MLP projections.
-
 Inputs : data/train_sft.jsonl + data/val_sft.jsonl
-Output : models/fine_tuned_v2/final_model  (LoRA adapter + tokenizer)
+Output : models/fine_tuned/final_model  (LoRA adapter + tokenizer)
 
 The official TEST split is NEVER used here (train/val only).
 
 Quick smoke test (validates the whole pipeline in ~1-2 min, no multi-hour wait):
-  python -m src.train_v2 --max_steps 5
+  python -m src.train --max_steps 5
 Full run:
-  python -m src.train_v2 --epochs 1
+  python -m src.train --epochs 1
 """
 
 from __future__ import annotations
@@ -80,7 +73,7 @@ def main():
     p.add_argument("--model_name", default=DEFAULT_MODEL)
     p.add_argument("--train_file", default="data/train_sft.jsonl")
     p.add_argument("--val_file", default="data/val_sft.jsonl")
-    p.add_argument("--output_dir", default="models/fine_tuned_v2")
+    p.add_argument("--output_dir", default="models/fine_tuned")
     p.add_argument("--epochs", type=float, default=1.0)
     p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--grad_accum", type=int, default=16)
