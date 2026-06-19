@@ -1,24 +1,34 @@
 """
-inference.py — Reusable inference script for Turkish legal QA.
+inference.py — Inference for modern instruct / multimodal LLMs (Gemma 3, Qwen3.5, …).
 
-Generation settings (documented here for reproducibility):
-    max_new_tokens : int  = 256   — Maximum tokens the model may generate per answer.
-    temperature    : float = 0.0  — Greedy decoding (do_sample=False) for deterministic output.
-    do_sample      : bool  = False — No stochastic sampling; temperature is effectively unused.
-    device         : str          — Resolved automatically via device_map="auto" (GPU if available,
-                                    otherwise CPU).  Override with --device cpu|cuda.
-    load_in_4bit   : bool  = False — Optional 4-bit quantization via bitsandbytes to reduce VRAM.
+Why a v2 script (inference.py is left completely untouched):
+  • inference.py uses a plain-text "Sistem:/Soru:/Cevap:" completion prompt and loads
+    only via AutoModelForCausalLM — correct for the original baselines, but newer
+    instruct / multimodal models need their native chat template and a different
+    loader class.
+  • This script:
+      - loads via AutoModelForCausalLM, falling back to AutoModelForImageTextToText for
+        multimodal checkpoints (Gemma 3, Qwen3.5);
+      - always formats inputs with the model's native chat template (folding the system
+        prompt into the user turn for models like Gemma that reject a 'system' role);
+      - writes the SAME JSONL schema as inference.py, so evaluate.py and
+        bertscore_eval.py work on its output unchanged.
 
-Outputs are written to:
-    outputs/<model_slug>_inference.jsonl
+Requirements:
+  • Gemma 3 → transformers >= 4.51 and `huggingface-cli login` (gated model).
+  • Qwen3.5 → transformers v5 (older versions raise 'Unrecognized model'); on Windows the
+    custom Mamba/Triton kernels may fail — that is the known wall, not a bug in this script.
 
-Each line is a JSON object with:
-    {
-        "model_name":       <str>,   # HF model identifier
-        "question":         <str>,   # Original question from test corpus
-        "reference_answer": <str>,   # Gold answer from test corpus
-        "generated_answer": <str>    # Model's generated answer
-    }
+NOTE ON COMPARABILITY: models run here use their chat template, whereas the three original
+baselines (inference.py) used a plain completion prompt. Numbers from this script are
+therefore NOT strictly apples-to-apples with those baselines — footnote it, or re-run all
+models the same way if a fully fair table is needed.
+
+Usage:
+  python -m src.inferencev2 --model "google/gemma-3-4b-it" --sample_size 200 \
+      --max_new_tokens 128 --load_in_4bit
+
+Output: outputs/<model_slug>_inference.jsonl
 """
 
 from __future__ import annotations
@@ -30,18 +40,8 @@ import re
 
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.data_prep import load_and_prepare_dataset
-
-# ---------------------------------------------------------------------------
-# Generation hyper-parameters (single source of truth)
-# ---------------------------------------------------------------------------
-GENERATION_CONFIG: dict = {
-    "max_new_tokens": 256,
-    "do_sample": False,       # greedy decoding — temperature is not applied
-    "temperature": None,      # kept for documentation; ignored when do_sample=False
-}
 
 SYSTEM_PROMPT = (
     "Sen bir Türk hukuk asistanısın. "
@@ -49,109 +49,68 @@ SYSTEM_PROMPT = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Prompt builder
-# ---------------------------------------------------------------------------
+def _model_slug(model_name: str) -> str:
+    """Converts a HF model ID to a safe filename component (matches inference.py)."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", model_name)
 
-def build_prompt(question: str, context: str = "") -> str:
-    """
-    Builds the Turkish legal QA prompt for inference (no answer appended).
 
-    Args:
-        question: The legal question from the test corpus.
-        context:  Optional background context for the question.
-
-    Returns:
-        A formatted prompt string ending with 'Cevap:' for the model to complete.
-    """
-    if context and context.strip():
-        return (
-            f"Sistem: {SYSTEM_PROMPT}\n\n"
-            f"Soru: {question}\n\n"
-            f"Bağlam: {context}\n\n"
-            f"Cevap:"
-        )
-    return (
-        f"Sistem: {SYSTEM_PROMPT}\n\n"
-        f"Soru: {question}\n\n"
-        f"Cevap:"
+def _extract_fields(item: dict) -> tuple[str, str, str]:
+    """Pulls question / context / reference from a dataset row (multiple field names)."""
+    question = (
+        item.get("instruction")
+        or item.get("question")
+        or item.get("Soru")
+        or item.get("soru")
+        or ""
     )
-
-
-# ---------------------------------------------------------------------------
-# Single-sample generation
-# ---------------------------------------------------------------------------
-
-def generate_answer(
-    model: AutoModelForCausalLM,
-    tokenizer: AutoTokenizer,
-    question: str,
-    context: str = "",
-    max_new_tokens: int = GENERATION_CONFIG["max_new_tokens"],
-) -> str:
-    """
-    Generates an answer for a single question using greedy decoding.
-
-    Args:
-        model:          A loaded CausalLM model.
-        tokenizer:      Corresponding tokenizer.
-        question:       The legal question.
-        context:        Optional context string.
-        max_new_tokens: Maximum tokens to generate.
-
-    Returns:
-        The generated answer text (prompt stripped).
-    """
-    prompt = build_prompt(question, context)
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=GENERATION_CONFIG["do_sample"],
-            pad_token_id=tokenizer.eos_token_id,
-        )
-
-    # Decode only the newly generated tokens (strip the prompt)
-    new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-
-
-# ---------------------------------------------------------------------------
-# Model loader
-# ---------------------------------------------------------------------------
-
-def load_model(
-    model_name: str,
-    load_in_4bit: bool = False,
-    device: str | None = None,
-) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """
-    Loads a CausalLM model and its tokenizer.
-
-    Args:
-        model_name:   HF model identifier (e.g. 'ytu-ce-cosmos/Turkish-Llama-8b-Instruct-v0.1').
-        load_in_4bit: Whether to apply 4-bit quantization (requires bitsandbytes + CUDA).
-        device:       Explicit device string ('cpu', 'cuda').  None → device_map='auto'.
-
-    Returns:
-        Tuple of (model, tokenizer).
-    """
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
+    context = (
+        item.get("input")
+        or item.get("context")
+        or item.get("Bağlam")
+        or item.get("Baglam")
+        or item.get("bağlam")
+        or item.get("baglam")
+        or ""
     )
-    if tokenizer.pad_token is None:
+    reference = (
+        item.get("output")
+        or item.get("answer")
+        or item.get("Cevap")
+        or item.get("cevap")
+        or ""
+    )
+    return question, context, reference
+
+
+def load_model(model_name: str, load_in_4bit: bool = False, device: str | None = None,
+               adapter: str | None = None):
+    """
+    Loads model + (processor or tokenizer).
+
+    Tries AutoModelForCausalLM first and falls back to AutoModelForImageTextToText for
+    multimodal checkpoints (Gemma 3, Qwen3.5).
+    """
+    from transformers import AutoTokenizer
+
+    processor = None
+    tokenizer = None
+
+    # Multimodal models expose an AutoProcessor (which wraps a tokenizer); text-only
+    # models only have a tokenizer.
+    try:
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+        tokenizer = getattr(processor, "tokenizer", None)
+    except Exception:
+        processor = None
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    load_kwargs: dict = {}
-
-    if device:
-        load_kwargs["device_map"] = device
-    else:
-        load_kwargs["device_map"] = "auto"
-
+    load_kwargs: dict = {"device_map": device or "auto"}
     if load_in_4bit:
         from transformers import BitsAndBytesConfig
 
@@ -160,24 +119,85 @@ def load_model(
             bnb_4bit_compute_dtype=torch.float16,
         )
     else:
-        load_kwargs["torch_dtype"] = torch.float16
+        load_kwargs["torch_dtype"] = "auto"
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        **load_kwargs,
-    )
+    from transformers import AutoModelForCausalLM
+
+    model = None
+    errors = []
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, trust_remote_code=True, **load_kwargs
+        )
+    except Exception as e:
+        errors.append(f"AutoModelForCausalLM -> {e}")
+        try:
+            from transformers import AutoModelForImageTextToText
+
+            model = AutoModelForImageTextToText.from_pretrained(
+                model_name, trust_remote_code=True, **load_kwargs
+            )
+        except Exception as e2:
+            errors.append(f"AutoModelForImageTextToText -> {e2}")
+            raise RuntimeError(
+                f"Could not load '{model_name}'.\n" + "\n".join(errors)
+            )
+
+    if adapter:
+        from peft import PeftModel
+
+        print(f"LoRA adaptörü yükleniyor: {adapter}")
+        model = PeftModel.from_pretrained(model, adapter)
+
     model.eval()
-    return model, tokenizer
+    return model, tokenizer, processor
 
 
-# ---------------------------------------------------------------------------
-# Per-model inference loop
-# ---------------------------------------------------------------------------
+def build_inputs(tokenizer, processor, question: str, context: str, device,
+                 no_think: bool = False):
+    """
+    Builds chat-template inputs. Tries a system+user message first; if the model's
+    template rejects a 'system' role (e.g. Gemma), folds the system prompt into the
+    user turn.
 
-def _model_slug(model_name: str) -> str:
-    """Converts a HF model ID to a safe filename component."""
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", model_name)
+    When no_think=True, passes enable_thinking=False to the chat template. Qwen3 /
+    Qwen3.5 emit a reasoning chain by default; for short-answer QA we want the direct
+    answer, not the (often English) chain-of-thought.
+    """
+    if context and context.strip():
+        user_content = f"Soru: {question}\n\nBağlam: {context}"
+    else:
+        user_content = f"Soru: {question}"
+
+    tok = processor if processor is not None else tokenizer
+
+    template_kwargs = dict(
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    if no_think:
+        template_kwargs["enable_thinking"] = False
+
+    message_variants = [
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        [
+            {"role": "user", "content": f"{SYSTEM_PROMPT}\n\n{user_content}"},
+        ],
+    ]
+
+    last_err = None
+    for messages in message_variants:
+        try:
+            enc = tok.apply_chat_template(messages, **template_kwargs)
+            return {k: (v.to(device) if hasattr(v, "to") else v) for k, v in enc.items()}
+        except Exception as e:
+            last_err = e
+    raise last_err
 
 
 def run_inference(
@@ -186,70 +206,50 @@ def run_inference(
     sample_size: int | None = None,
     load_in_4bit: bool = False,
     device: str | None = None,
-    max_new_tokens: int = GENERATION_CONFIG["max_new_tokens"],
+    max_new_tokens: int = 128,
     dataset_name: str = "Renicames/turkish-law-chatbot",
+    no_think: bool = False,
+    adapter: str | None = None,
+    run_tag: str | None = None,
 ) -> str:
-    """
-    Runs inference for one model on the full test corpus and saves results.
-
-    Args:
-        model_name:     HF model identifier.
-        output_dir:     Directory to write the JSONL output file.
-        sample_size:    If set, only the first N test samples are used.
-        load_in_4bit:   Enable 4-bit quantization.
-        device:         Explicit device override.
-        max_new_tokens: Token budget per generation.
-        dataset_name:   HF dataset to use.
-
-    Returns:
-        Path to the written JSONL output file.
-    """
     print(f"\n{'='*60}")
-    print(f"Model  : {model_name}")
-    print(f"Cihaz  : {device or 'auto'}")
-    print(f"4-bit  : {load_in_4bit}")
-    print(f"max_new_tokens: {max_new_tokens}")
-    print(f"do_sample     : {GENERATION_CONFIG['do_sample']}  (greedy decoding)")
+    print(f"Model         : {model_name}")
+    print(f"4-bit         : {load_in_4bit}")
+    print(f"max_new_tokens: {max_new_tokens}  (greedy, chat template)")
+    print(f"no_think      : {no_think}")
+    print(f"adapter       : {adapter or '-'}")
     print(f"{'='*60}\n")
 
     dataset = load_and_prepare_dataset(dataset_name)
     test_data = dataset["test"]
-
     if sample_size and sample_size < len(test_data):
         test_data = test_data.select(range(sample_size))
-
     print(f"Test corpus: {len(test_data)} örnek")
 
-    model, tokenizer = load_model(model_name, load_in_4bit=load_in_4bit, device=device)
+    model, tokenizer, processor = load_model(model_name, load_in_4bit, device, adapter=adapter)
 
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{_model_slug(model_name)}_inference.jsonl")
+    tag = f"_{run_tag}" if run_tag else ""
+    output_path = os.path.join(output_dir, f"{_model_slug(model_name)}{tag}_inference.jsonl")
 
     with open(output_path, "w", encoding="utf-8") as f:
         for item in tqdm(test_data, desc=f"Inference — {model_name}"):
-            question = (
-                item.get("instruction")
-                or item.get("question")
-                or item.get("Soru")
-                or item.get("soru")
-                or ""
+            question, context, reference = _extract_fields(item)
+            enc = build_inputs(
+                tokenizer, processor, question, context, model.device, no_think=no_think
             )
-            context = (
-                item.get("input")
-                or item.get("context")
-                or item.get("Bagam")
-                or item.get("bagam")
-                or ""
-            )
-            reference = (
-                item.get("output")
-                or item.get("answer")
-                or item.get("Cevap")
-                or item.get("cevap")
-                or ""
-            )
+            input_len = enc["input_ids"].shape[1]
 
-            generated = generate_answer(model, tokenizer, question, context, max_new_tokens)
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **enc,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+
+            new_tokens = output_ids[0][input_len:]
+            generated = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
             record = {
                 "model_name": model_name,
@@ -263,85 +263,55 @@ def run_inference(
     return output_path
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Run inference for one or two models on the Turkish legal QA test corpus. "
-            "Results are saved as JSONL files under --output_dir."
+            "Inference for modern instruct/multimodal LLMs (Gemma 3, Qwen3.5) on the "
+            "Turkish legal QA test corpus. Output is JSONL compatible with evaluate.py "
+            "and bertscore_eval.py."
         )
     )
+    parser.add_argument("--model", type=str, required=True, help="HF model ID")
+    parser.add_argument("--output_dir", type=str, default="outputs")
     parser.add_argument(
-        "--model_a",
-        type=str,
-        required=True,
-        help="HF model ID for Model A (e.g. 'ytu-ce-cosmos/Turkish-Llama-8b-Instruct-v0.1')",
+        "--sample_size", type=int, default=None,
+        help="Limit inference to the first N test samples",
+    )
+    parser.add_argument("--max_new_tokens", type=int, default=128)
+    parser.add_argument(
+        "--load_in_4bit", action="store_true",
+        help="Load in 4-bit (bitsandbytes). Fine for Gemma 3; for Qwen3.5 prefer fp16.",
+    )
+    parser.add_argument("--device", type=str, default=None, choices=["cpu", "cuda"])
+    parser.add_argument(
+        "--dataset_name", type=str, default="Renicames/turkish-law-chatbot",
     )
     parser.add_argument(
-        "--model_b",
-        type=str,
-        default=None,
-        help="HF model ID for Model B (optional; run after Model A)",
+        "--no_think", action="store_true",
+        help="Disable thinking/reasoning chains (enable_thinking=False) for Qwen3/Qwen3.5 "
+             "so the model returns the direct answer instead of a chain-of-thought.",
     )
     parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="outputs",
-        help="Directory to store JSONL output files (default: outputs/)",
+        "--adapter", type=str, default=None,
+        help="Path to a LoRA adapter to load on top of the base model (the fine-tuned "
+             "model, e.g. models/fine_tuned_v2/final_model).",
     )
     parser.add_argument(
-        "--sample_size",
-        type=int,
-        default=None,
-        help="Limit inference to the first N test samples (useful for quick runs)",
+        "--run_tag", type=str, default=None,
+        help="Suffix added to the output filename (e.g. base_full / finetuned_full) so "
+             "before/after runs don't overwrite each other.",
     )
-    parser.add_argument(
-        "--load_in_4bit",
-        action="store_true",
-        help="Load model(s) in 4-bit quantization to reduce VRAM usage",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default=None,
-        choices=["cpu", "cuda"],
-        help="Force a specific device (default: auto-detect)",
-    )
-    parser.add_argument(
-        "--max_new_tokens",
-        type=int,
-        default=GENERATION_CONFIG["max_new_tokens"],
-        help=f"Max tokens to generate per answer (default: {GENERATION_CONFIG['max_new_tokens']})",
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="Renicames/turkish-law-chatbot",
-        help="HF dataset identifier (default: Renicames/turkish-law-chatbot)",
-    )
-
     args = parser.parse_args()
 
     run_inference(
-        model_name=args.model_a,
+        model_name=args.model,
         output_dir=args.output_dir,
         sample_size=args.sample_size,
         load_in_4bit=args.load_in_4bit,
         device=args.device,
         max_new_tokens=args.max_new_tokens,
         dataset_name=args.dataset_name,
+        no_think=args.no_think,
+        adapter=args.adapter,
+        run_tag=args.run_tag,
     )
-
-    if args.model_b:
-        run_inference(
-            model_name=args.model_b,
-            output_dir=args.output_dir,
-            sample_size=args.sample_size,
-            load_in_4bit=args.load_in_4bit,
-            device=args.device,
-            max_new_tokens=args.max_new_tokens,
-            dataset_name=args.dataset_name,
-        )
