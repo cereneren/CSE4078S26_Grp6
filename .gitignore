@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project generated artifacts and large ML files
+models/
+data/emb/
+*.npy
+*.safetensors
+*.pt
