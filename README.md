@@ -441,6 +441,36 @@ Because training and preprocessing scripts may expose their settings through com
 
 ---
 
+## Usage (Commands)
+
+```bash
+# 0. cache the official dataset splits locally
+python -m src.data_prep
+
+# 1. preprocessing  (train split only — the test split is never touched)
+python -m src.preprocess_01_regexfilter --min_a_words 6 --max_q_freq 2 --max_a_freq 6   # -> data/train_clean.jsonl  (13,354 -> 12,336)
+python -m src.preprocess_02_semanticembed --mode embed                                  # -> data/emb/  (Qwen3-Embedding-4B, bf16)
+python -m src.preprocess_03_clustercap --cap 4 --threshold 0.955 --apply                # -> data/train_sft.jsonl, val_sft.jsonl  (12,336 -> 11,898 -> 10,709 / 1,189)
+
+# 2. fine-tune  (LoRA, 16-bit bf16; epoch 3 = lowest validation loss)
+python -m src.train_v2 --output_dir models/fine_tuned --epochs 4 --max_seq_len 512
+
+# 3. before / after inference on the full 1,500-example test split  (max_new_tokens = 256)
+python -m src.inferencev2 --model Qwen/Qwen3-4B-Instruct-2507 --max_new_tokens 256 --run_tag a_base_full
+python -m src.inferencev2 --model Qwen/Qwen3-4B-Instruct-2507 --adapter models/fine_tuned/final_model --max_new_tokens 256 --run_tag finetuned_full
+
+# 4. evaluation + reproducible error analysis
+python -m src.evaluate       --input_file outputs/Qwen_Qwen3-4B-Instruct-2507_finetuned_full_inference.jsonl
+python -m src.bertscore_eval --input_file outputs/Qwen_Qwen3-4B-Instruct-2507_finetuned_full_inference.jsonl
+python -m src.error_analysis \
+    --base      outputs/Qwen_Qwen3-4B-Instruct-2507_a_base_full_inference.jsonl \
+    --finetuned outputs/Qwen_Qwen3-4B-Instruct-2507_finetuned_full_inference.jsonl
+```
+
+`inferencev2.py` defaults to `--max_new_tokens 128`, so pass `256` explicitly to match the reported runs. All thresholds are command-line parameters and the train/validation split uses a fixed seed of `42`.
+
+---
+
 ## Technologies
 
 * Python
@@ -470,4 +500,3 @@ However, the remaining failure cases show that higher automatic scores do not gu
 This repository is intended only for academic and research purposes.
 
 The generated answers do not constitute legal advice. The model may produce incorrect, incomplete, outdated, contradictory, or hallucinated legal information. Consult a qualified legal professional before making legal decisions.
-::: 
