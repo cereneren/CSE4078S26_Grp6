@@ -1,11 +1,6 @@
 """
 inference.py — Inference for modern instruct / multimodal LLMs (Gemma 3, Qwen3.5, …).
 
-Why a v2 script (inference.py is left completely untouched):
-  • inference.py uses a plain-text "Sistem:/Soru:/Cevap:" completion prompt and loads
-    only via AutoModelForCausalLM — correct for the original baselines, but newer
-    instruct / multimodal models need their native chat template and a different
-    loader class.
   • This script:
       - loads via AutoModelForCausalLM, falling back to AutoModelForImageTextToText for
         multimodal checkpoints (Gemma 3, Qwen3.5);
@@ -25,7 +20,7 @@ therefore NOT strictly apples-to-apples with those baselines — footnote it, or
 models the same way if a fully fair table is needed.
 
 Usage:
-  python -m src.inferencev2 --model "google/gemma-3-4b-it" --sample_size 200 \
+  python -m src.inference --model "google/gemma-3-4b-it" --sample_size 1500 \
       --max_new_tokens 128 --load_in_4bit
 
 Output: outputs/<model_slug>_inference.jsonl
@@ -294,7 +289,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--adapter", type=str, default=None,
         help="Path to a LoRA adapter to load on top of the base model (the fine-tuned "
-             "model, e.g. models/fine_tuned_v2/final_model).",
+             "model, e.g. models/fine_tuned/final_model).",
     )
     parser.add_argument(
         "--run_tag", type=str, default=None,
