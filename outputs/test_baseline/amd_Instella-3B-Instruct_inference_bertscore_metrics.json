@@ -1,8 +1,0 @@
-{
-  "input_file": "outputs/amd_Instella-3B-Instruct_inference.jsonl",
-  "samples": 1500,
-  "bertscore_model": "bert-base-multilingual-cased",
-  "bertscore_precision": 0.5135545134544373,
-  "bertscore_recall": 0.540288507938385,
-  "bertscore_f1": 0.5248773694038391
-}

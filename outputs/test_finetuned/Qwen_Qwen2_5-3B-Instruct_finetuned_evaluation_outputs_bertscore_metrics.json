@@ -1,8 +1,0 @@
-{
-  "input_file": "outputs/test_finetuned/Qwen_Qwen2_5-3B-Instruct_finetuned_evaluation_outputs.jsonl",
-  "samples": 1500,
-  "bertscore_model": "bert-base-multilingual-cased",
-  "bertscore_precision": 0.7094780206680298,
-  "bertscore_recall": 0.7189340591430664,
-  "bertscore_f1": 0.7130274772644043
-}
